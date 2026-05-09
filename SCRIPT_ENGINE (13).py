@@ -2096,46 +2096,46 @@ with st.sidebar:
     st.success("Service account loaded\n\n**forscripting@gen-lang-client...**\n\nPush to Sheets always ready.", icon="🔑")
     st.caption(f"[Open Target Sheet](https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit)")
 
-    # ── CHANGE 2: Google AI key input for Nano Banana thumbnail ──
+    # ── CHANGE 2: Dynamic API key input for Thumbnails ──
     st.divider()
-    st.markdown("### Thumbnail (Nano Banana)")
-    gemini_key_input = st.text_input(
-        "Google AI API Key for Thumbnail",
-        type="password",
-        placeholder="AIzaSy...",
-        help="Needs a valid Google AI Studio key with access to Gemini 2.5 Flash Image Preview. Get one at aistudio.google.com",
-        key="gemini_key_sidebar",
+    st.markdown("### Thumbnail Settings")
+    
+    thumb_model = st.selectbox(
+        "Image Model",
+        [
+            "🌌 Nano Banana Pro (Gemini 3 Pro)",
+            "⚡ Nano Banana (Gemini 2.5 Flash)",
+            "🎨 DALL-E 3 (OpenAI)"
+        ],
+        key="thumb_model_sidebar"
     )
-    if gemini_key_input.strip():
-        st.markdown('<p class="key-ok">Google AI key entered ✓</p>', unsafe_allow_html=True)
+
+    if "DALL-E" in thumb_model:
+        thumb_key_input = st.text_input(
+            "OpenAI API Key (DALL-E 3)",
+            type="password",
+            placeholder="sk-proj-...",
+            key="dalle_key_sidebar",
+        )
+        if thumb_key_input.strip():
+            st.markdown('<p class="key-ok">OpenAI key entered ✓</p>', unsafe_allow_html=True)
+        else:
+            st.markdown('<p class="key-warn">Paste OpenAI key for DALL-E 3</p>', unsafe_allow_html=True)
     else:
-        st.markdown('<p class="key-warn">Paste your Google AI key here to enable thumbnail generation</p>', unsafe_allow_html=True)
+        thumb_key_input = st.text_input(
+            "Google AI API Key (Gemini)",
+            type="password",
+            placeholder="AIzaSy...",
+            key="gemini_key_sidebar",
+        )
+        if thumb_key_input.strip():
+            st.markdown('<p class="key-ok">Google AI key entered ✓</p>', unsafe_allow_html=True)
+        else:
+            st.markdown('<p class="key-warn">Paste Google AI key for Nano Banana</p>', unsafe_allow_html=True)
 
     st.divider()
     st.caption("SCRIPT ENGINE v4.0 · SKY Academy Internal Tool")
-        return call_gemini(api_key, model, system_p, user_p, _cb)
-
-# ============================================================
-# THUMBNAIL GENERATION (GEMINI NANO BANANA)
-# SKY ACADEMY STYLE
-# ============================================================
-
-import re
-import json
-import base64
-import requests
-
-# ============================================================
-# THUMBNAIL PROMPT BUILDER
-# ============================================================
-
-def build_thumbnail_prompt(
-    line1: str,
-    line2: str,
-    line3: str,
-    line4: str,
-    topic: str = "",
-    variation: int = 0
+    st.caption(f"Each segment strictly 150-180 words")
 ) -> str:
 
     variation_text = ""
@@ -2169,13 +2169,34 @@ VISUAL STYLE & AESTHETIC:
 # MAIN IMAGE GENERATOR
 # ============================================================
 
-def generate_thumbnail_nanobanana(
+def generate_thumbnail_dalle(
     line1: str,
     line2: str,
     line3: str,
     line4: str,
     topic: str,
     api_key: str,
+    variation: int = 0
+) -> bytes:
+    client = openai.OpenAI(api_key=api_key, timeout=180.0)
+    prompt = build_thumbnail_prompt(line1, line2, line3, line4, topic, variation)
+    response = client.images.generate(
+        model="dall-e-3",
+        prompt=prompt,
+        size="1792x1024",
+        quality="hd",
+        response_format="b64_json"
+    )
+    return base64.b64decode(response.data[0].b64_json)
+
+def generate_thumbnail_gemini(
+    line1: str,
+    line2: str,
+    line3: str,
+    line4: str,
+    topic: str,
+    api_key: str,
+    model_endpoint: str,
     variation: int = 0
 ) -> bytes:
 
@@ -2188,7 +2209,7 @@ def generate_thumbnail_nanobanana(
         variation=variation
     )
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_endpoint}:generateContent?key={api_key}"
     
     payload = {
         "contents": [
@@ -2784,7 +2805,7 @@ with st.container():
             "🎨 Generate Thumbnail",
             key="thumb_gen_btn",
             use_container_width=True,
-            help="Creates thumbnail with Nano Banana (requires Google AI key in sidebar)",
+            help="Creates thumbnail with your selected Image Model",
         )
     with tb3:
         thumb_regen_btn = st.button(
@@ -2825,65 +2846,58 @@ with st.container():
                     _ts.empty()
                     st.error(f"Suggestion error: {_exc}")
 
-    # ── CHANGE 3a: Handle Generate Thumbnail (uses gemini_key_sidebar) ──
-    if thumb_gen_btn:
-        l1 = st.session_state.get("thumb_l1", "").strip()
-        l2 = st.session_state.get("thumb_l2", "").strip()
-        l3 = st.session_state.get("thumb_l3", "").strip()
-        l4 = st.session_state.get("thumb_l4", "").strip()
-        gemini_api_key = st.session_state.get("gemini_key_sidebar", "").strip()
-        if not gemini_api_key:
-            st.error("Please enter your Google AI API key in the sidebar (under **Thumbnail** section) before generating!")
-        elif not any([l1, l2, l3, l4]):
-            st.error("Please fill at least one line before generating!")
+    # ── CHANGE 3: Handle Generate/Regenerate with Dynamic Model Selection ──
+    if thumb_gen_btn or thumb_regen_btn:
+        is_regen = thumb_regen_btn
+        if is_regen and st.session_state.thumb_img_bytes is None:
+            pass # Button is disabled, ignore
         else:
-            with st.spinner("Generating thumbnail with Nano Banana... (10-20 seconds)"):
-                try:
-                    img_bytes = generate_thumbnail_nanobanana(
-                        l1 or "SKY ACADEMY",
-                        l2 or "COMPETITIVE EXAM PREPARATION",
-                        l3 or "STRATEGY + PDF FREE",
-                        l4 or "ఇప్పుడే చూడండి!",
-                        st.session_state.last_topic or "competitive exam",
-                        api_key=gemini_api_key,
-                        variation=0,
-                    )
-                    st.session_state.thumb_img_bytes = img_bytes
-                    st.session_state.thumb_variation = 0
-                    st.success("Thumbnail generated!")
-                    st.rerun()
-                except Exception as _exc:
-                    st.error(f"Thumbnail generation error: {_exc}")
-                    st.caption("Check that your Google AI key is valid and has access to Gemini 2.5 Flash Image Preview.")
-
-    # ── CHANGE 3b: Handle Regenerate (uses gemini_key_sidebar) ──
-    if thumb_regen_btn and st.session_state.thumb_img_bytes is not None:
-        l1 = st.session_state.get("thumb_l1", "").strip()
-        l2 = st.session_state.get("thumb_l2", "").strip()
-        l3 = st.session_state.get("thumb_l3", "").strip()
-        l4 = st.session_state.get("thumb_l4", "").strip()
-        gemini_api_key = st.session_state.get("gemini_key_sidebar", "").strip()
-        new_variation = (st.session_state.thumb_variation + 1) % 50 + 1
-        if not gemini_api_key:
-            st.error("Please enter your Google AI API key in the sidebar (under **Thumbnail** section)!")
-        else:
-            with st.spinner(f"Regenerating thumbnail (variation #{new_variation})..."):
-                try:
-                    img_bytes = generate_thumbnail_nanobanana(
-                        l1 or "SKY ACADEMY",
-                        l2 or "COMPETITIVE EXAM PREPARATION",
-                        l3 or "STRATEGY + PDF FREE",
-                        l4 or "ఇప్పుడే చూడండి!",
-                        st.session_state.last_topic or "competitive exam",
-                        api_key=gemini_api_key,
-                        variation=new_variation,
-                    )
-                    st.session_state.thumb_img_bytes = img_bytes
-                    st.session_state.thumb_variation = new_variation
-                    st.success(f"New variation #{new_variation} generated!")
-                    st.rerun()
-                except Exception as _exc:
-                    st.error(f"Regen error: {_exc}")
+            l1 = st.session_state.get("thumb_l1", "").strip()
+            l2 = st.session_state.get("thumb_l2", "").strip()
+            l3 = st.session_state.get("thumb_l3", "").strip()
+            l4 = st.session_state.get("thumb_l4", "").strip()
+            
+            thumb_model_selected = st.session_state.get("thumb_model_sidebar", "🌌 Nano Banana Pro (Gemini 3 Pro)")
+            is_dalle = "DALL-E" in thumb_model_selected
+            
+            # Fetch the correct API key
+            api_key_thumb = st.session_state.get("dalle_key_sidebar", "").strip() if is_dalle else st.session_state.get("gemini_key_sidebar", "").strip()
+            
+            if not api_key_thumb:
+                provider_name = "OpenAI" if is_dalle else "Google AI"
+                st.error(f"Please enter your {provider_name} API key in the sidebar (under **Thumbnail Settings**)!")
+            elif not any([l1, l2, l3, l4]):
+                st.error("Please fill at least one line before generating!")
+            else:
+                new_variation = (st.session_state.thumb_variation + 1) % 50 + 1 if is_regen else 0
+                action_text = f"Regenerating (variation #{new_variation})" if is_regen else "Generating thumbnail"
+                
+                with st.spinner(f"{action_text} using {thumb_model_selected}... (15-30 seconds)"):
+                    try:
+                        if is_dalle:
+                            img_bytes = generate_thumbnail_dalle(
+                                l1 or "SKY ACADEMY", l2 or "COMPETITIVE EXAM PREPARATION", l3 or "STRATEGY + PDF FREE", l4 or "ఇప్పుడే చూడండి!",
+                                st.session_state.last_topic or "competitive exam", api_key=api_key_thumb, variation=new_variation
+                            )
+                        elif "Flash" in thumb_model_selected:
+                            img_bytes = generate_thumbnail_gemini(
+                                l1 or "SKY ACADEMY", l2 or "COMPETITIVE EXAM PREPARATION", l3 or "STRATEGY + PDF FREE", l4 or "ఇప్పుడే చూడండి!",
+                                st.session_state.last_topic or "competitive exam", api_key=api_key_thumb, model_endpoint="gemini-2.5-flash-image-preview", variation=new_variation
+                            )
+                        else:
+                            # Default to Nano Banana Pro
+                            img_bytes = generate_thumbnail_gemini(
+                                l1 or "SKY ACADEMY", l2 or "COMPETITIVE EXAM PREPARATION", l3 or "STRATEGY + PDF FREE", l4 or "ఇప్పుడే చూడండి!",
+                                st.session_state.last_topic or "competitive exam", api_key=api_key_thumb, model_endpoint="gemini-3-pro-image-preview-11-2025", variation=new_variation
+                            )
+                            
+                        st.session_state.thumb_img_bytes = img_bytes
+                        st.session_state.thumb_variation = new_variation
+                        st.success(f"Thumbnail generated using {thumb_model_selected}!")
+                        st.rerun()
+                    except Exception as _exc:
+                        st.error(f"Thumbnail generation error: {_exc}")
+                        st.caption("Check that your API key is valid and has access to the requested model.")
 
     # Display generated thumbnail
     if st.session_state.thumb_img_bytes:
@@ -2903,8 +2917,8 @@ with st.container():
         with td2:
             st.caption(
                 "💡 **Tips:** Download and open in Canva or Photoshop to add exact Telugu text "
-                "overlays and fine-tune positioning. Nano Banana sets the cinematic background and style, "
-                "you can perfect the text layout."
+                "overlays and fine-tune positioning. The AI sets the cinematic background and style, "
+                "you can perfect the exact text layout."
             )
 
 
