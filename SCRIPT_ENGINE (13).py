@@ -1966,8 +1966,8 @@ def push_to_gsheet(chunks, seo_title="", seo_tags=""):
     try:
         import gspread
         from google.oauth2.service_account import Credentials
-        scopes = ["[https://spreadsheets.google.com/feeds](https://spreadsheets.google.com/feeds)",
-                  "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)"]
+        scopes = ["https://www.googleapis.com/auth/spreadsheets",
+                  "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(_HARDCODED_CREDS, scopes=scopes)
         gc    = gspread.authorize(creds)
         sheet = gc.open_by_key(SHEET_ID)
@@ -2096,26 +2096,132 @@ with st.sidebar:
     st.success("Service account loaded\n\n**forscripting@gen-lang-client...**\n\nPush to Sheets always ready.", icon="🔑")
     st.caption(f"[Open Target Sheet](https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit)")
 
-    # ── CHANGE 2: OpenAI key input for DALL-E thumbnail ──
+    # ── CHANGE 2: Google AI key input for Nano Banana thumbnail ──
     st.divider()
-    st.markdown("### Thumbnail (DALL-E 3)")
-    dalle_key_input = st.text_input(
-        "OpenAI API Key for DALL-E",
+    st.markdown("### Thumbnail (Nano Banana)")
+    gemini_key_input = st.text_input(
+        "Google AI API Key for Thumbnail",
         type="password",
-        placeholder="sk-proj-...",
-        help="Needs a valid OpenAI key with DALL-E 3 access. Get one at platform.openai.com",
-        key="dalle_key_sidebar",
+        placeholder="AIzaSy...",
+        help="Needs a valid Google AI Studio key with access to Gemini 2.5 Flash Image Preview. Get one at aistudio.google.com",
+        key="gemini_key_sidebar",
     )
-    if dalle_key_input.strip():
-        st.markdown('<p class="key-ok">DALL-E key entered ✓</p>', unsafe_allow_html=True)
+    if gemini_key_input.strip():
+        st.markdown('<p class="key-ok">Google AI key entered ✓</p>', unsafe_allow_html=True)
     else:
-        st.markdown('<p class="key-warn">Paste your OpenAI key here to enable thumbnail generation</p>', unsafe_allow_html=True)
+        st.markdown('<p class="key-warn">Paste your Google AI key here to enable thumbnail generation</p>', unsafe_allow_html=True)
 
     st.divider()
     st.caption("SCRIPT ENGINE v4.0 · SKY Academy Internal Tool")
-    st.caption(f"Each segment strictly 150-180 words")
+        return call_gemini(api_key, model, system_p, user_p, _cb)
+
+# ============================================================
+# THUMBNAIL GENERATION (GEMINI NANO BANANA)
+# SKY ACADEMY STYLE
+# ============================================================
+
+import re
+import json
+import base64
+import requests
+
+# ============================================================
+# THUMBNAIL PROMPT BUILDER
+# ============================================================
+
+def build_thumbnail_prompt(
+    line1: str,
+    line2: str,
+    line3: str,
+    line4: str,
+    topic: str = "",
+    variation: int = 0
+) -> str:
+
+    variation_text = ""
+    if variation > 0:
+        variation_text = f"Apply a fresh creative layout variation #{variation}, but keep the core style."
+
+    prompt = f"""
+Create a highly professional, high-CTR educational YouTube thumbnail for an Indian competitive exam channel called "SKY Academy".
+We need the best possible thumbnail capturing an intense, authoritative, and cinematic coaching style. 
+
+{variation_text}
+
+TEXT ELEMENTS TO INCLUDE EXACTLY:
+1. Top Ribbon/Badge: "{line1}"
+2. Main Massive Headline: "{line2}"
+3. Sub-Headline/Context: "{line3}"
+4. Bottom Hook/Banner: "{line4}"
+
+VISUAL STYLE & AESTHETIC:
+- Inspiration: Indian UPSC/High Court/SSC coaching videos.
+- Background: A cinematic, dark and moody background (e.g., dark blue, crimson red, or charcoal). Subtly blend thematic elements into the background (like the High Court building, scales of justice, law books, a target board, or a study desk) based on the topic: {topic}.
+- Typography: Bold, massive, thick sans-serif fonts. Make the main headline pop with bright yellow or white text. Use 3D bevels, drop shadows, and glowing effects so the text is the absolute focal point.
+- Colors: High contrast. Use vibrant yellow, bright red, clean white, and neon green accents against the dark background.
+- Layout: Clean and uncluttered. Put the top ribbon at the top, the main headline in the center, and the hook at the bottom. 
+- Please make it look as close to a real Photoshop-designed coaching thumbnail as possible. Be creative to suit our needs!
+"""
+    return prompt.strip()
 
 
+# ============================================================
+# MAIN IMAGE GENERATOR
+# ============================================================
+
+def generate_thumbnail_nanobanana(
+    line1: str,
+    line2: str,
+    line3: str,
+    line4: str,
+    topic: str,
+    api_key: str,
+    variation: int = 0
+) -> bytes:
+
+    prompt = build_thumbnail_prompt(
+        line1=line1,
+        line2=line2,
+        line3=line3,
+        line4=line4,
+        topic=topic,
+        variation=variation
+    )
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key={api_key}"
+    
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "responseModalities": ["IMAGE"]
+        }
+    }
+    
+    headers = {'Content-Type': 'application/json'}
+    resp = requests.post(url, headers=headers, json=payload)
+    
+    if resp.status_code != 200:
+        raise Exception(f"API Error {resp.status_code}: {resp.text}")
+        
+    data = resp.json()
+    try:
+        parts = data['candidates'][0]['content']['parts']
+        for part in parts:
+            if 'inlineData' in part:
+                img_data = part['inlineData']['data']
+                return base64.b64decode(img_data)
+        raise ValueError("No inlineData found in the response parts.")
+    except Exception as e:
+        raise Exception(f"Failed to parse image from response: {str(e)}")
+
+# ============================================================
+# JSON SANITIZER
 # ============================================================
 # LIVE STREAM MASTER PLACEHOLDER
 # ============================================================
@@ -2678,7 +2784,7 @@ with st.container():
             "🎨 Generate Thumbnail",
             key="thumb_gen_btn",
             use_container_width=True,
-            help="Creates thumbnail with DALL-E 3 (requires OpenAI key in sidebar)",
+            help="Creates thumbnail with Nano Banana (requires Google AI key in sidebar)",
         )
     with tb3:
         thumb_regen_btn = st.button(
@@ -2719,27 +2825,27 @@ with st.container():
                     _ts.empty()
                     st.error(f"Suggestion error: {_exc}")
 
-    # ── CHANGE 3a: Handle Generate Thumbnail (uses dalle_key_sidebar) ──
+    # ── CHANGE 3a: Handle Generate Thumbnail (uses gemini_key_sidebar) ──
     if thumb_gen_btn:
         l1 = st.session_state.get("thumb_l1", "").strip()
         l2 = st.session_state.get("thumb_l2", "").strip()
         l3 = st.session_state.get("thumb_l3", "").strip()
         l4 = st.session_state.get("thumb_l4", "").strip()
-        dalle_api_key = st.session_state.get("dalle_key_sidebar", "").strip()
-        if not dalle_api_key:
-            st.error("Please enter your OpenAI API key in the sidebar (under **Thumbnail** section) before generating!")
+        gemini_api_key = st.session_state.get("gemini_key_sidebar", "").strip()
+        if not gemini_api_key:
+            st.error("Please enter your Google AI API key in the sidebar (under **Thumbnail** section) before generating!")
         elif not any([l1, l2, l3, l4]):
             st.error("Please fill at least one line before generating!")
         else:
-            with st.spinner("Generating thumbnail with DALL-E 3 HD... (20-30 seconds)"):
+            with st.spinner("Generating thumbnail with Nano Banana... (10-20 seconds)"):
                 try:
-                    img_bytes = generate_thumbnail_dalle(
+                    img_bytes = generate_thumbnail_nanobanana(
                         l1 or "SKY ACADEMY",
                         l2 or "COMPETITIVE EXAM PREPARATION",
                         l3 or "STRATEGY + PDF FREE",
                         l4 or "ఇప్పుడే చూడండి!",
                         st.session_state.last_topic or "competitive exam",
-                        api_key=dalle_api_key,
+                        api_key=gemini_api_key,
                         variation=0,
                     )
                     st.session_state.thumb_img_bytes = img_bytes
@@ -2748,28 +2854,28 @@ with st.container():
                     st.rerun()
                 except Exception as _exc:
                     st.error(f"Thumbnail generation error: {_exc}")
-                    st.caption("Check that your OpenAI key is valid and has DALL-E 3 access.")
+                    st.caption("Check that your Google AI key is valid and has access to Gemini 2.5 Flash Image Preview.")
 
-    # ── CHANGE 3b: Handle Regenerate (uses dalle_key_sidebar) ──
+    # ── CHANGE 3b: Handle Regenerate (uses gemini_key_sidebar) ──
     if thumb_regen_btn and st.session_state.thumb_img_bytes is not None:
         l1 = st.session_state.get("thumb_l1", "").strip()
         l2 = st.session_state.get("thumb_l2", "").strip()
         l3 = st.session_state.get("thumb_l3", "").strip()
         l4 = st.session_state.get("thumb_l4", "").strip()
-        dalle_api_key = st.session_state.get("dalle_key_sidebar", "").strip()
+        gemini_api_key = st.session_state.get("gemini_key_sidebar", "").strip()
         new_variation = (st.session_state.thumb_variation + 1) % 50 + 1
-        if not dalle_api_key:
-            st.error("Please enter your OpenAI API key in the sidebar (under **Thumbnail** section)!")
+        if not gemini_api_key:
+            st.error("Please enter your Google AI API key in the sidebar (under **Thumbnail** section)!")
         else:
             with st.spinner(f"Regenerating thumbnail (variation #{new_variation})..."):
                 try:
-                    img_bytes = generate_thumbnail_dalle(
+                    img_bytes = generate_thumbnail_nanobanana(
                         l1 or "SKY ACADEMY",
                         l2 or "COMPETITIVE EXAM PREPARATION",
                         l3 or "STRATEGY + PDF FREE",
                         l4 or "ఇప్పుడే చూడండి!",
                         st.session_state.last_topic or "competitive exam",
-                        api_key=dalle_api_key,
+                        api_key=gemini_api_key,
                         variation=new_variation,
                     )
                     st.session_state.thumb_img_bytes = img_bytes
@@ -2797,8 +2903,8 @@ with st.container():
         with td2:
             st.caption(
                 "💡 **Tips:** Download and open in Canva or Photoshop to add exact Telugu text "
-                "overlays and fine-tune positioning. DALL-E sets the background style, "
-                "you perfect the text."
+                "overlays and fine-tune positioning. Nano Banana sets the cinematic background and style, "
+                "you can perfect the text layout."
             )
 
 
