@@ -4,7 +4,7 @@
 # Three Input Modes: Topic | Multi-Transcript Merge | Book PDF
 # Video Types: General (Strategy/Motivation) | Subjective (Deep Teaching)
 # v4.0: Telugu Lipi Output · Script-Only (No Image Prompts) · 150-180w Chunks
-#        AI Thumbnail Generator (DALL-E 3) · Standalone Handout Mode
+#        AI Thumbnail Generator (Multi-Model) · Standalone Handout Mode
 #        Poe.com API Integration & Expanded Model Options
 # SKY Academy Internal Tool
 # ============================================================
@@ -16,6 +16,7 @@ import math
 import io
 import base64
 import random
+import requests
 
 st.set_page_config(
     page_title="🎬 SKY Academy – Script Engine",
@@ -545,9 +546,8 @@ _SYSTEM_PDF = (
     "Step 3 -- FULL SKY ACADEMY VOICE IN TELUGU LIPI\n"
 ) + _SKY_DNA + _OUTPUT_FORMAT
 
-
 # ============================================================
-# UTILITY -- STRIP EMOJIS
+# UTILITY FUNCTIONS
 # ============================================================
 def strip_emojis(text: str) -> str:
     emoji_pattern = re.compile(
@@ -564,7 +564,6 @@ def strip_emojis(text: str) -> str:
     )
     return emoji_pattern.sub("", text).strip()
 
-
 def store_new_chunks(parsed: list):
     for i, c in enumerate(parsed):
         cleaned = strip_emojis(c.get("telugu_text", ""))
@@ -572,7 +571,6 @@ def store_new_chunks(parsed: list):
         st.session_state[f"tv_{i}"] = cleaned
     st.session_state.chunks   = parsed
     st.session_state.seo_pack = None
-
 
 def sync_edits_to_chunks() -> list:
     chunks = st.session_state.chunks
@@ -588,11 +586,6 @@ def sync_edits_to_chunks() -> list:
             ),
         })
     return synced
-
-
-# ============================================================
-# ROBUST JSON PARSING UTILITIES
-# ============================================================
 
 def _sanitize_json_str(s: str) -> str:
     result = []
@@ -625,7 +618,6 @@ def _sanitize_json_str(s: str) -> str:
         else:
             result.append(c)
     return ''.join(result)
-
 
 def _extract_complete_objects(json_str: str) -> list:
     segments = []
@@ -688,11 +680,9 @@ def _extract_complete_objects(json_str: str) -> list:
 
     return segments
 
-
 def parse_segments(raw: str):
     if not raw or not raw.strip():
         return None
-
     cleaned = raw.strip()
     cleaned = re.sub(r"^```[a-zA-Z]*\s*\n?", "", cleaned)
     cleaned = re.sub(r"\n?```\s*$", "", cleaned).strip()
@@ -748,17 +738,77 @@ def parse_segments(raw: str):
 
     return None
 
+def parse_single_segment(raw: str):
+    cleaned = raw.strip()
+    cleaned = re.sub(r"^```[a-zA-Z]*\s*\n?", "", cleaned)
+    cleaned = re.sub(r"\n?```\s*$", "", cleaned).strip()
+    for attempt in [cleaned, _sanitize_json_str(cleaned)]:
+        try:
+            result = json.loads(attempt)
+            if isinstance(result, dict):
+                return result
+            if isinstance(result, list) and result:
+                return result[0]
+        except Exception:
+            pass
+    m = re.search(r"\{[\s\S]*\}", cleaned)
+    if m:
+        for attempt in [m.group(), _sanitize_json_str(m.group())]:
+            try:
+                result = json.loads(attempt)
+                if isinstance(result, dict):
+                    return result
+            except Exception:
+                pass
+    return None
+
+def parse_seo_json(raw: str):
+    cleaned = raw.strip()
+    cleaned = re.sub(r"^```[a-zA-Z]*\s*\n?", "", cleaned)
+    cleaned = re.sub(r"\n?```\s*$", "", cleaned).strip()
+    for attempt in [cleaned, _sanitize_json_str(cleaned)]:
+        try:
+            result = json.loads(attempt)
+            if isinstance(result, dict):
+                return result
+        except Exception:
+            pass
+    m = re.search(r"\{[\s\S]*\}", cleaned)
+    if m:
+        for attempt in [m.group(), _sanitize_json_str(m.group())]:
+            try:
+                return json.loads(attempt)
+            except Exception:
+                pass
+    return None
+
+def parse_handout_content(raw: str):
+    cleaned = raw.strip()
+    cleaned = re.sub(r"^```[a-zA-Z]*\s*\n?", "", cleaned)
+    cleaned = re.sub(r"\n?```\s*$", "", cleaned).strip()
+    for attempt in [cleaned, _sanitize_json_str(cleaned)]:
+        try:
+            result = json.loads(attempt)
+            if isinstance(result, dict):
+                return result
+        except Exception:
+            pass
+    m = re.search(r'\{[\s\S]*\}', cleaned)
+    if m:
+        for attempt in [m.group(), _sanitize_json_str(m.group())]:
+            try:
+                result = json.loads(attempt)
+                if isinstance(result, dict):
+                    return result
+            except Exception:
+                pass
+    return None
 
 # ============================================================
 # PROMPT BUILDERS
 # ============================================================
 def _inject_counts(system: str, num_segs: int) -> str:
-    return (
-        system
-        .replace("{NUM_SEGS}", str(num_segs))
-        .replace("{WORDS_PER_SEGMENT}", str(WORDS_PER_SEGMENT))
-    )
-
+    return system.replace("{NUM_SEGS}", str(num_segs)).replace("{WORDS_PER_SEGMENT}", str(WORDS_PER_SEGMENT))
 
 def build_prompts_topic(topic, num_segs, special_instructions, video_type="subjective"):
     vdna   = _DNA_GENERAL_VIDEO if video_type == "general" else _DNA_SUBJECTIVE_VIDEO
@@ -782,9 +832,7 @@ def build_prompts_topic(topic, num_segs, special_instructions, video_type="subje
     )
     return system, user
 
-
-def build_prompts_multi_transcript(transcripts, topic_hint, num_segs,
-                                   special_instructions, merge_mode="auto", video_type="subjective"):
+def build_prompts_multi_transcript(transcripts, topic_hint, num_segs, special_instructions, merge_mode="auto", video_type="subjective"):
     vdna   = _DNA_GENERAL_VIDEO if video_type == "general" else _DNA_SUBJECTIVE_VIDEO
     system = _inject_counts(_SYSTEM_TRANSCRIPT + "\n\n" + TELUGU_TTS_MASTER_PROMPT + "\n\n" + vdna, num_segs)
     n      = len(transcripts)
@@ -816,7 +864,6 @@ def build_prompts_multi_transcript(transcripts, topic_hint, num_segs,
     )
     return system, user
 
-
 def build_prompts_pdf(pdf_text, topic_hint, num_segs, special_instructions, video_type="subjective"):
     vdna   = _DNA_GENERAL_VIDEO if video_type == "general" else _DNA_SUBJECTIVE_VIDEO
     system = _inject_counts(_SYSTEM_PDF + "\n\n" + TELUGU_TTS_MASTER_PROMPT + "\n\n" + vdna, num_segs)
@@ -837,7 +884,6 @@ def build_prompts_pdf(pdf_text, topic_hint, num_segs, special_instructions, vide
         f"- Return ONLY valid JSON"
     )
     return system, user
-
 
 def build_regen_segment_prompt(video_type, topic, chunks, seg_idx, instruction, num_segs):
     vdna     = _DNA_GENERAL_VIDEO if video_type == "general" else _DNA_SUBJECTIVE_VIDEO
@@ -871,7 +917,6 @@ def build_regen_segment_prompt(video_type, topic, chunks, seg_idx, instruction, 
     )
     return system, user
 
-
 def build_seo_prompt(topic, chunks, video_type):
     preview = " ".join(c.get("telugu_text","")[:180] for c in chunks[:3])
     system  = (
@@ -888,7 +933,122 @@ def build_seo_prompt(topic, chunks, video_type):
     )
     return system, user
 
+def build_handout_prompt(topic: str, chunks: list, num_pages: int) -> tuple:
+    script_outline = ""
+    for i, c in enumerate(chunks[:10]):
+        title = c.get("title", f"Segment {i+1}")
+        script_outline += f"Segment {i+1}: {title}\n"
+    target_words = num_pages * 380
+    system = (
+        "You are an expert educational content creator for SKY Academy. "
+        "Create comprehensive, accurate, print-ready study handouts in ENGLISH ONLY. "
+        "Include real data, dates, statistics, article numbers, case names. "
+        "Return ONLY valid JSON. No markdown fences. No text outside the JSON."
+    )
+    user = f"""Create a comprehensive study handout for competitive exam students.
 
+Topic: {topic}
+Target: approximately {num_pages} A4 printed page(s) (~{target_words} words of content)
+
+Script outline:
+{script_outline}
+
+Generate detailed JSON with this EXACT structure:
+{{
+  "topic_title": "Full descriptive topic title",
+  "exam_importance": "2-3 sentences about why this topic appears in UPSC/APPSC/TSPSC/SSC exams",
+  "key_facts": [
+    {{"label": "short label", "value": "specific fact/date/data"}}
+  ],
+  "sections": [
+    {{
+      "heading": "Introduction / Historical Background",
+      "text": "Write 2-3 full paragraphs here with actual context, history, and significance.",
+      "bullets": [],
+      "table": null,
+      "questions": []
+    }},
+    {{
+      "heading": "Key Concepts / Important Terms",
+      "text": "1-2 paragraph explanation with real data.",
+      "bullets": ["specific point with actual data"],
+      "table": {{
+        "headers": ["Term / Item", "Meaning / Description", "Significance / Example"],
+        "rows": [
+          ["term1", "meaning1", "significance1"]
+        ]
+      }},
+      "questions": []
+    }},
+    {{
+      "heading": "Previous Year Questions (PYQ Style)",
+      "text": "",
+      "bullets": [],
+      "table": null,
+      "questions": [
+        "Q1. Full question text here? (UPSC/APPSC Year)"
+      ]
+    }}
+  ]
+}}
+
+STRICT RULES:
+1. ENGLISH ONLY -- absolutely no Telugu text
+2. Every "text" field MUST have 2-3 full sentences minimum
+3. Include REAL specific data: exact dates, article numbers, amendment numbers
+4. Tables must have minimum 4 rows of meaningful data
+5. PYQs must be realistic exam-quality questions
+6. Generate enough content to fill approximately {num_pages} A4 pages
+7. Return ONLY valid JSON -- nothing else"""
+    return system, user
+
+def build_standalone_handout_prompt(topic_overview: str, num_pages: int) -> tuple:
+    target_words = num_pages * 380
+    system = (
+        "You are an expert educational content creator for SKY Academy. "
+        "Create comprehensive, accurate, print-ready study handouts in ENGLISH ONLY. "
+        "Include real data, dates, statistics, article numbers, case names. "
+        "Return ONLY valid JSON. No markdown fences. No text outside the JSON."
+    )
+    user = f"""Create a comprehensive study handout for competitive exam students based on the following topic overview and directions.
+
+TOPIC OVERVIEW & DIRECTIONS:
+{topic_overview.strip()}
+
+Target: approximately {num_pages} A4 printed page(s) (~{target_words} words of content)
+
+Generate detailed JSON with this EXACT structure (same structure as default handout):
+{{
+  "topic_title": "Full descriptive topic title",
+  "exam_importance": "2-3 sentences about why this topic appears in UPSC/APPSC/TSPSC/SSC exams",
+  "key_facts": [
+    {{"label": "short label", "value": "specific fact/date/data"}}
+  ],
+  "sections": [
+    {{
+      "heading": "Introduction / Background",
+      "text": "Write 2-3 full paragraphs with actual context, history, and significance.",
+      "bullets": [],
+      "table": null,
+      "questions": []
+    }}
+  ]
+}}
+
+STRICT RULES:
+1. ENGLISH ONLY
+2. Every "text" field: minimum 2-3 full sentences
+3. Real specific data: exact dates, article numbers, statistics
+4. Tables: minimum 4 rows
+5. PYQs: realistic exam-quality questions with exam name and year
+6. Fill approximately {num_pages} A4 pages
+7. Return ONLY valid JSON"""
+    return system, user
+
+
+# ============================================================
+# THUMBNAIL PROMPTS & GENERATORS
+# ============================================================
 def build_thumbnail_suggest_prompt(topic, chunks, video_type):
     preview = ""
     if chunks:
@@ -923,208 +1083,246 @@ Return ONLY valid JSON:
 """
     return system, user
 
+def build_thumbnail_prompt(line1: str, line2: str, line3: str, line4: str, topic: str = "", variation: int = 0) -> str:
+    variation_text = f"Apply a fresh creative layout variation #{variation}, but keep the core style." if variation > 0 else ""
+    return f"""
+Create a highly professional, high-CTR educational YouTube thumbnail for an Indian competitive exam channel called "SKY Academy".
+We need the best possible thumbnail capturing an intense, authoritative, and cinematic coaching style. 
 
-# ============================================================
-# AI HANDOUT PROMPT BUILDERS
-# ============================================================
-def build_handout_prompt(topic: str, chunks: list, num_pages: int) -> tuple:
-    script_outline = ""
-    for i, c in enumerate(chunks[:10]):
-        title = c.get("title", f"Segment {i+1}")
-        script_outline += f"Segment {i+1}: {title}\n"
+{variation_text}
 
-    target_words = num_pages * 380
+TEXT ELEMENTS TO INCLUDE EXACTLY (Do not add extra text):
+1. Top Ribbon/Badge: "{line1}"
+2. Main Massive Headline: "{line2}"
+3. Sub-Headline/Context: "{line3}"
+4. Bottom Hook/Banner: "{line4}"
 
-    system = (
-        "You are an expert educational content creator for SKY Academy. "
-        "Create comprehensive, accurate, print-ready study handouts in ENGLISH ONLY. "
-        "Include real data, dates, statistics, article numbers, case names. "
-        "Return ONLY valid JSON. No markdown fences. No text outside the JSON."
+VISUAL STYLE & AESTHETIC:
+- Inspiration: Indian UPSC/High Court/SSC coaching videos.
+- Background: A cinematic, dark and moody background (e.g., dark blue, crimson red, or charcoal). Subtly blend thematic elements into the background (like the High Court building, scales of justice, law books, a target board, or a study desk) based on the topic: {topic}.
+- Typography: Bold, massive, thick sans-serif fonts. Make the main headline pop with bright yellow or white text. Use 3D bevels, drop shadows, and glowing effects so the text is the absolute focal point.
+- Colors: High contrast. Use vibrant yellow, bright red, clean white, and neon green accents against the dark background.
+- Layout: Clean and uncluttered. Put the top ribbon at the top, the main headline in the center, and the hook at the bottom. 
+- Please make it look as close to a real Photoshop-designed coaching thumbnail as possible.
+""".strip()
+
+def generate_thumbnail_dalle(line1: str, line2: str, line3: str, line4: str, topic: str, api_key: str, variation: int = 0) -> bytes:
+    import openai
+    client = openai.OpenAI(api_key=api_key, timeout=180.0)
+    prompt = build_thumbnail_prompt(line1, line2, line3, line4, topic, variation)
+    response = client.images.generate(
+        model="dall-e-3",
+        prompt=prompt,
+        size="1792x1024",
+        quality="hd",
+        response_format="b64_json"
     )
+    return base64.b64decode(response.data[0].b64_json)
 
-    user = f"""Create a comprehensive study handout for competitive exam students.
-
-Topic: {topic}
-Target: approximately {num_pages} A4 printed page(s) (~{target_words} words of content)
-
-Script outline:
-{script_outline}
-
-Generate detailed JSON with this EXACT structure:
-{{
-  "topic_title": "Full descriptive topic title",
-  "exam_importance": "2-3 sentences about why this topic appears in UPSC/APPSC/TSPSC/SSC exams",
-  "key_facts": [
-    {{"label": "short label", "value": "specific fact/date/data"}},
-    {{"label": "short label", "value": "specific fact/date/data"}}
-  ],
-  "sections": [
-    {{
-      "heading": "Introduction / Historical Background",
-      "text": "Write 2-3 full paragraphs here with actual context, history, and significance.",
-      "bullets": [],
-      "table": null,
-      "questions": []
-    }},
-    {{
-      "heading": "Key Concepts / Important Terms",
-      "text": "1-2 paragraph explanation with real data.",
-      "bullets": ["specific point with actual data", "another specific point"],
-      "table": {{
-        "headers": ["Term / Item", "Meaning / Description", "Significance / Example"],
-        "rows": [
-          ["term1", "meaning1", "significance1"],
-          ["term2", "meaning2", "significance2"],
-          ["term3", "meaning3", "significance3"],
-          ["term4", "meaning4", "significance4"]
-        ]
-      }},
-      "questions": []
-    }},
-    {{
-      "heading": "Important Data / Current Affairs",
-      "text": "Explanation paragraph with latest data.",
-      "bullets": ["data point 1 with specific numbers", "data point 2"],
-      "table": null,
-      "questions": []
-    }},
-    {{
-      "heading": "Memory Tricks & Quick Connections",
-      "text": "Use these clever connections to never forget these facts:",
-      "bullets": ["Memory trick 1 -- explain the connection clearly", "Memory trick 2 -- fun and memorable"],
-      "table": null,
-      "questions": []
-    }},
-    {{
-      "heading": "Previous Year Questions (PYQ Style)",
-      "text": "",
-      "bullets": [],
-      "table": null,
-      "questions": [
-        "Q1. Full question text here? (UPSC/APPSC Year)",
-        "Q2. Full question text here? (TSPSC Year)",
-        "Q3. Full question text here? (SSC Year)"
-      ]
-    }}
-  ]
-}}
-
-STRICT RULES:
-1. ENGLISH ONLY -- absolutely no Telugu text
-2. Every "text" field MUST have 2-3 full sentences minimum
-3. Include REAL specific data: exact dates, article numbers, amendment numbers
-4. Tables must have minimum 4 rows of meaningful data
-5. Memory tricks must be instantly obvious and clever
-6. PYQs must be realistic exam-quality questions
-7. Generate enough content to fill approximately {num_pages} A4 pages
-8. Return ONLY valid JSON -- nothing else"""
-
-    return system, user
-
-
-def build_standalone_handout_prompt(topic_overview: str, num_pages: int) -> tuple:
-    target_words = num_pages * 380
-
-    system = (
-        "You are an expert educational content creator for SKY Academy. "
-        "Create comprehensive, accurate, print-ready study handouts in ENGLISH ONLY. "
-        "Include real data, dates, statistics, article numbers, case names. "
-        "Return ONLY valid JSON. No markdown fences. No text outside the JSON."
-    )
-
-    user = f"""Create a comprehensive study handout for competitive exam students based on the following topic overview and directions.
-
-TOPIC OVERVIEW & DIRECTIONS:
-{topic_overview.strip()}
-
-Target: approximately {num_pages} A4 printed page(s) (~{target_words} words of content)
-
-Generate detailed JSON with this EXACT structure:
-{{
-  "topic_title": "Full descriptive topic title",
-  "exam_importance": "2-3 sentences about why this topic appears in UPSC/APPSC/TSPSC/SSC exams",
-  "key_facts": [
-    {{"label": "short label", "value": "specific fact/date/data"}},
-    {{"label": "short label", "value": "specific fact/date/data"}}
-  ],
-  "sections": [
-    {{
-      "heading": "Introduction / Background",
-      "text": "Write 2-3 full paragraphs with actual context, history, and significance.",
-      "bullets": [],
-      "table": null,
-      "questions": []
-    }},
-    {{
-      "heading": "Core Concepts & Key Terms",
-      "text": "1-2 paragraph explanation with real data.",
-      "bullets": ["specific point", "another specific point"],
-      "table": {{
-        "headers": ["Item", "Description", "Significance"],
-        "rows": [
-          ["item1", "desc1", "sig1"],
-          ["item2", "desc2", "sig2"],
-          ["item3", "desc3", "sig3"],
-          ["item4", "desc4", "sig4"]
-        ]
-      }},
-      "questions": []
-    }},
-    {{
-      "heading": "Important Data & Statistics",
-      "text": "Paragraph with key numbers and current data.",
-      "bullets": ["data point 1", "data point 2"],
-      "table": null,
-      "questions": []
-    }},
-    {{
-      "heading": "Memory Tricks & Quick Connections",
-      "text": "Clever connections to never forget key facts:",
-      "bullets": ["trick 1", "trick 2"],
-      "table": null,
-      "questions": []
-    }},
-    {{
-      "heading": "Previous Year Questions (PYQ Style)",
-      "text": "",
-      "bullets": [],
-      "table": null,
-      "questions": [
-        "Q1. Full question? (Exam Year)",
-        "Q2. Full question? (Exam Year)",
-        "Q3. Full question? (Exam Year)"
-      ]
-    }}
-  ]
-}}
-
-STRICT RULES:
-1. ENGLISH ONLY
-2. Every "text" field: minimum 2-3 full sentences
-3. Real specific data: exact dates, article numbers, statistics
-4. Tables: minimum 4 rows
-5. PYQs: realistic exam-quality questions with exam name and year
-6. Fill approximately {num_pages} A4 pages
-7. Return ONLY valid JSON"""
-
-    return system, user
+def generate_thumbnail_gemini(line1: str, line2: str, line3: str, line4: str, topic: str, api_key: str, model_endpoint: str, variation: int = 0) -> bytes:
+    prompt = build_thumbnail_prompt(line1, line2, line3, line4, topic, variation)
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_endpoint}:generateContent?key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseModalities": ["IMAGE"]}
+    }
+    headers = {'Content-Type': 'application/json'}
+    resp = requests.post(url, headers=headers, json=payload)
+    if resp.status_code != 200:
+        raise Exception(f"API Error {resp.status_code}: {resp.text}")
+    data = resp.json()
+    try:
+        parts = data['candidates'][0]['content']['parts']
+        for part in parts:
+            if 'inlineData' in part:
+                img_data = part['inlineData']['data']
+                return base64.b64decode(img_data)
+        raise ValueError("No inlineData found in the response parts.")
+    except Exception as e:
+        raise Exception(f"Failed to parse image from response: {str(e)}")
 
 
 # ============================================================
-# STUDY NOTES HTML
+# API TEXT GENERATION FUNCTIONS
 # ============================================================
-def generate_study_notes_html(chunks: list, video_type: str,
-                               heading: str = "", youtube_link: str = "") -> str:
-    accent_colors = ["#3b82f6","#ef4444","#16a34a","#f97316",
-                     "#7c3aed","#0891b2","#be185d","#b45309"]
+def call_poe(api_key, model, system, user, progress_cb=None):
+    import openai
+    client = openai.OpenAI(api_key=api_key, base_url=POE_BASE_URL, timeout=300.0)
+    full = ""
+    for chunk in client.chat.completions.create(
+        model=model, max_tokens=16000, stream=True,
+        messages=[{"role":"system","content":system},{"role":"user","content":user}],
+    ):
+        delta = chunk.choices[0].delta.content or ""
+        full += delta
+        if progress_cb and delta:
+            progress_cb(len(full), full)
+    return full
 
+def call_claude_pagegrid(api_key, model, system, user, progress_cb=None):
+    import anthropic
+    if not api_key.startswith("sk-pgrid-"):
+        raise ValueError("PageGrid key must start with 'sk-pgrid-'.")
+    client = anthropic.Anthropic(api_key=api_key, base_url=PAGEGRID_BASE_URL, timeout=300.0)
+    full = ""
+    with client.messages.stream(
+        model=model, max_tokens=16000, system=system,
+        messages=[{"role":"user","content":user}],
+    ) as stream:
+        for chunk in stream.text_stream:
+            full += chunk
+            if progress_cb:
+                progress_cb(len(full), full)
+    return full
+
+def call_openai(api_key, model, system, user, progress_cb=None):
+    import openai
+    client = openai.OpenAI(api_key=api_key, timeout=300.0)
+    is_reasoning = model.startswith("o1") or model.startswith("o3")
+    if is_reasoning:
+        resp = client.chat.completions.create(
+            model=model, max_completion_tokens=16000,
+            messages=[{"role":"user","content":f"{system}\n\n---\n\n{user}"}],
+        )
+        raw = resp.choices[0].message.content
+        if progress_cb:
+            progress_cb(len(raw), raw)
+        return raw
+    else:
+        full = ""
+        for chunk in client.chat.completions.create(
+            model=model, max_tokens=16000, stream=True,
+            messages=[{"role":"system","content":system},{"role":"user","content":user}],
+        ):
+            delta = chunk.choices[0].delta.content or ""
+            full += delta
+            if progress_cb and delta:
+                progress_cb(len(full), full)
+        return full
+
+def call_gemini(api_key, model, system, user, progress_cb=None):
+    import google.generativeai as genai
+    genai.configure(api_key=api_key)
+    m = genai.GenerativeModel(model_name=model, system_instruction=system)
+    full = ""
+    for chunk in m.generate_content(user, stream=True):
+        t = getattr(chunk, "text", "") or ""
+        full += t
+        if progress_cb and t:
+            progress_cb(len(full), full)
+    return full
+
+def run_generation(api_key, provider, model, system_p, user_p, status_ph, stream_ph=None):
+    def _cb(n, text):
+        status_ph.markdown(
+            f'<div class="stream-progress">'
+            f'<b>Generating...</b> &nbsp; {n:,} chars &nbsp;·&nbsp; '
+            f'~{n // 5:,} words est. &nbsp;·&nbsp; keep tab open'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if stream_ph is not None:
+            display = text[-2800:] if len(text) > 2800 else text
+            stream_ph.text_area(
+                label="stream_live",
+                value=display,
+                height=270,
+                disabled=True,
+                label_visibility="collapsed",
+            )
+    if "Poe.com" in provider:
+        return call_poe(api_key, model, system_p, user_p, _cb)
+    elif "PageGrid" in provider:
+        return call_claude_pagegrid(api_key, model, system_p, user_p, _cb)
+    elif "OpenAI" in provider:
+        return call_openai(api_key, model, system_p, user_p, _cb)
+    else:
+        return call_gemini(api_key, model, system_p, user_p, _cb)
+
+
+# ============================================================
+# FILE EXTRACTION & GOOGLE SHEETS
+# ============================================================
+def extract_pdf_text(file_bytes: bytes):
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+        pages  = [p.extract_text() for p in reader.pages if p.extract_text()]
+        if pages: return "\n".join(pages).strip(), f"pypdf · {len(reader.pages)} pages"
+    except Exception: pass
+    try:
+        import PyPDF2
+        reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+        pages  = [p.extract_text() for p in reader.pages if p.extract_text()]
+        if pages: return "\n".join(pages).strip(), f"PyPDF2 · {len(reader.pages)} pages"
+    except Exception: pass
+    return None, "No PDF library. Run: pip install pypdf"
+
+def extract_docx_text(file_bytes: bytes):
+    try:
+        from docx import Document
+        doc   = Document(io.BytesIO(file_bytes))
+        parts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+        for tbl in doc.tables:
+            for row in tbl.rows:
+                for cell in row.cells:
+                    if cell.text.strip(): parts.append(cell.text.strip())
+        text = "\n".join(parts)
+        if text.strip(): return text.strip(), f"python-docx · {len(doc.paragraphs)} paragraphs"
+        return None, "DOCX file appears empty"
+    except Exception as exc: return None, f"DOCX error: {exc}"
+
+def extract_any_file(file_bytes: bytes, filename: str):
+    ext = filename.rsplit(".",1)[-1].lower() if "." in filename else ""
+    if ext == "txt":
+        for enc in ("utf-8","utf-16","latin-1"):
+            try:
+                text = file_bytes.decode(enc)
+                if text.strip(): return text.strip(), f"TXT · {len(text.split())} words"
+            except Exception: pass
+        return None, "Could not decode TXT file"
+    elif ext == "docx": return extract_docx_text(file_bytes)
+    elif ext == "pdf": return extract_pdf_text(file_bytes)
+    return None, f"Unsupported file type: .{ext}"
+
+def push_to_gsheet(chunks, seo_title="", seo_tags=""):
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        # Updated to modern scope
+        scopes = ["[https://www.googleapis.com/auth/spreadsheets](https://www.googleapis.com/auth/spreadsheets)",
+                  "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)"]
+        creds = Credentials.from_service_account_info(_HARDCODED_CREDS, scopes=scopes)
+        gc    = gspread.authorize(creds)
+        sheet = gc.open_by_key(SHEET_ID)
+        ws    = sheet.get_worksheet(0)
+        ws.batch_clear(["A2:E10000"])
+        rows = [[i+1, c.get("title", f"Segment {i+1}"), c.get("telugu_text","")] for i, c in enumerate(chunks)]
+        ws.update("A2", rows, value_input_option="RAW")
+        seo_msg = ""
+        if seo_title.strip():
+            ws.update("D2", [[seo_title.strip()]], value_input_option="RAW")
+            seo_msg += " · Title --> D2"
+        if seo_tags.strip():
+            ws.update("E2", [[seo_tags.strip()]], value_input_option="RAW")
+            seo_msg += " · Tags --> E2"
+        return True, f"Pushed {len(rows)} segments (A=Seg, B=Title, C=Script{seo_msg}) -- cleared old data."
+    except Exception as exc:
+        return False, f"Sheets error: {exc}"
+
+
+# ============================================================
+# RENDERING FUNCTIONS
+# ============================================================
+def generate_study_notes_html(chunks: list, video_type: str, heading: str = "", youtube_link: str = "") -> str:
+    # Simplified string matching your previous styles
+    accent_colors = ["#3b82f6","#ef4444","#16a34a","#f97316","#7c3aed","#0891b2","#be185d","#b45309"]
     sections_html = ""
     for i, chunk in enumerate(chunks):
-        title      = chunk.get("title", f"Segment {i+1}")
-        color      = accent_colors[i % len(accent_colors)]
-        tel_text   = chunk.get("telugu_text","")
-        preview    = tel_text[:280] + ("..." if len(tel_text) > 280 else "")
-
+        title = chunk.get("title", f"Segment {i+1}")
+        color = accent_colors[i % len(accent_colors)]
+        tel_text = chunk.get("telugu_text","")
+        preview = tel_text[:280] + ("..." if len(tel_text) > 280 else "")
         sections_html += f"""
         <div class="ns" style="border-left-color:{color}">
           <div class="ns-head">
@@ -1132,35 +1330,19 @@ def generate_study_notes_html(chunks: list, video_type: str,
             <span class="ns-title">{title}</span>
           </div>
           <p class="nb-text">{preview}</p>
-          <div class="ann">
-            <div class="ann-label">My Notes</div>
-            <div class="ann-line"></div>
-            <div class="ann-line"></div>
-          </div>
+          <div class="ann"><div class="ann-label">My Notes</div><div class="ann-line"></div><div class="ann-line"></div></div>
         </div>"""
-
+    
     if youtube_link.strip():
-        vid_html = (
-            f'<div class="intro">To better understand this PDF, click here: '
-            f'<a href="{youtube_link.strip()}">{youtube_link.strip()}</a>'
-            f' &nbsp;·&nbsp; <strong>SKY Academy Competitive Exam Preparation</strong></div>'
-        )
+        vid_html = f'<div class="intro">To better understand this PDF, click here: <a href="{youtube_link.strip()}">{youtube_link.strip()}</a> &nbsp;·&nbsp; <strong>SKY Academy Competitive Exam Preparation</strong></div>'
     else:
-        vid_html = (
-            '<div class="intro">Read these notes while watching the video for maximum retention'
-            ' &nbsp;·&nbsp; <strong>SKY Academy Competitive Exam Preparation</strong></div>'
-        )
-
-    heading_html = ""
-    if heading.strip():
-        heading_html = f'<div class="custom-heading">{heading.strip()}</div>'
+        vid_html = '<div class="intro">Read these notes while watching the video for maximum retention &nbsp;·&nbsp; <strong>SKY Academy Competitive Exam Preparation</strong></div>'
+    
+    heading_html = f'<div class="custom-heading">{heading.strip()}</div>' if heading.strip() else ""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>SKY Academy -- Classroom Notes</title>
-<style>
+<head><meta charset="UTF-8"><title>SKY Academy -- Classroom Notes</title><style>
 *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
 body{{font-family:'Segoe UI',Arial,sans-serif;background:#dde3f0;padding:20px;color:#111;font-size:14px}}
 .page{{max-width:800px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 6px 32px rgba(0,0,0,.15)}}
@@ -1197,8 +1379,7 @@ body{{font-family:'Segoe UI',Arial,sans-serif;background:#dde3f0;padding:20px;co
   .ns{{break-inside:avoid}}
   @page{{margin:1.2cm 1.5cm}}
 }}
-</style>
-</head>
+</style></head>
 <body>
 <div class="page">
   <div class="hdr">
@@ -1215,165 +1396,57 @@ body{{font-family:'Segoe UI',Arial,sans-serif;background:#dde3f0;padding:20px;co
   <div class="body">{sections_html}</div>
   <div class="tg">
     <h4>SKY Academy Telegram Channel</h4>
-    <p>Free notes, daily PDFs, previous year questions and exam alerts --<br>
-    Join and take your preparation to the next level!</p>
+    <p>Free notes, daily PDFs, previous year questions and exam alerts --<br>Join and take your preparation to the next level!</p>
   </div>
   <div class="ftr">
-    <div class="flogo">
-      <span style="color:#FF6B6B">S</span>
-      <span style="color:#FFE66D">K</span>
-      <span style="color:#4ECDC4">Y</span>
-    </div>
+    <div class="flogo"><span style="color:#FF6B6B">S</span><span style="color:#FFE66D">K</span><span style="color:#4ECDC4">Y</span></div>
     <div class="fsub">SKY ACADEMY &nbsp;|&nbsp; Script Engine v4.0 &nbsp;|&nbsp; Internal Tool</div>
   </div>
 </div>
-</body>
-</html>"""
+</body></html>"""
 
-
-# ============================================================
-# PARSE HANDOUT JSON
-# ============================================================
-def parse_handout_content(raw: str):
-    cleaned = raw.strip()
-    cleaned = re.sub(r"^```[a-zA-Z]*\s*\n?", "", cleaned)
-    cleaned = re.sub(r"\n?```\s*$", "", cleaned).strip()
-    for attempt in [cleaned, _sanitize_json_str(cleaned)]:
-        try:
-            result = json.loads(attempt)
-            if isinstance(result, dict):
-                return result
-        except Exception:
-            pass
-    m = re.search(r'\{[\s\S]*\}', cleaned)
-    if m:
-        for attempt in [m.group(), _sanitize_json_str(m.group())]:
-            try:
-                result = json.loads(attempt)
-                if isinstance(result, dict):
-                    return result
-            except Exception:
-                pass
-    return None
-
-
-# ============================================================
-# RENDER AI HANDOUT HTML
-# ============================================================
-def render_handout_html(heading: str, youtube_link: str,
-                        content_data: dict, topic: str) -> str:
-    topic_title     = content_data.get("topic_title", heading or topic)
+def render_handout_html(heading: str, youtube_link: str, content_data: dict, topic: str) -> str:
+    topic_title = content_data.get("topic_title", heading or topic)
     exam_importance = content_data.get("exam_importance", "")
-    key_facts       = content_data.get("key_facts", [])
-    sections        = content_data.get("sections", [])
-
+    key_facts = content_data.get("key_facts", [])
+    sections = content_data.get("sections", [])
     display_heading = heading.strip() if heading.strip() else topic_title
 
-    if youtube_link.strip():
-        vid_html = (
-            f'<div class="vid-banner">To better understand this PDF, click here: '
-            f'<a href="{youtube_link.strip()}">{youtube_link.strip()}</a></div>'
-        )
-    else:
-        vid_html = (
-            '<div class="vid-banner">For better understanding, please watch our '
-            '<a href="[https://www.youtube.com/@Skyacademytelugu](https://www.youtube.com/@Skyacademytelugu)">'
-            '[https://www.youtube.com/@Skyacademytelugu](https://www.youtube.com/@Skyacademytelugu)</a> YouTube channel.</div>'
-        )
-
-    importance_html = ""
-    if exam_importance:
-        importance_html = (
-            f'<div class="exam-imp">'
-            f'<span class="eit">Why it Matters for Exams: </span>'
-            f'<span class="eit-text">{exam_importance}</span></div>'
-        )
+    vid_html = f'<div class="vid-banner">To better understand this PDF, click here: <a href="{youtube_link.strip()}">{youtube_link.strip()}</a></div>' if youtube_link.strip() else '<div class="vid-banner">For better understanding, please watch our <a href="[https://www.youtube.com/@Skyacademytelugu](https://www.youtube.com/@Skyacademytelugu)">[https://www.youtube.com/@Skyacademytelugu](https://www.youtube.com/@Skyacademytelugu)</a> YouTube channel.</div>'
+    importance_html = f'<div class="exam-imp"><span class="eit">Why it Matters for Exams: </span><span class="eit-text">{exam_importance}</span></div>' if exam_importance else ""
 
     facts_html = ""
     if key_facts:
-        facts_html = '<div class="kf-grid">'
-        for kf in key_facts:
-            facts_html += (
-                f'<div class="kf-box">'
-                f'<div class="kf-lbl">{kf.get("label","")}</div>'
-                f'<div class="kf-val">{kf.get("value","")}</div>'
-                f'</div>'
-            )
-        facts_html += '</div>'
+        facts_html = '<div class="kf-grid">' + "".join(f'<div class="kf-box"><div class="kf-lbl">{kf.get("label","")}</div><div class="kf-val">{kf.get("value","")}</div></div>' for kf in key_facts) + '</div>'
 
-    sec_colors = ["#1e293b","#1e3a5f","#1a3a2a","#2d1b4e","#3b1a1a",
-                  "#1a2d3b","#2d2000","#0d2d1a"]
+    sec_colors = ["#1e293b","#1e3a5f","#1a3a2a","#2d1b4e","#3b1a1a","#1a2d3b","#2d2000","#0d2d1a"]
     sections_html = ""
     for idx, sec in enumerate(sections):
-        sh        = sec.get("heading","")
-        text      = sec.get("text","")
-        bullets   = sec.get("bullets",[])
-        tbl       = sec.get("table",None)
-        questions = sec.get("questions",[])
+        sh, text, bullets, tbl, questions = sec.get("heading",""), sec.get("text",""), sec.get("bullets",[]), sec.get("table",None), sec.get("questions",[])
         hdr_color = sec_colors[idx % len(sec_colors)]
 
         table_html = ""
-        if tbl and isinstance(tbl, dict):
-            headers = tbl.get("headers",[])
-            rows    = tbl.get("rows",[])
-            if headers and rows:
-                table_html = "<table class='htbl'><thead><tr>"
-                for h in headers:
-                    table_html += f"<th>{h}</th>"
-                table_html += "</tr></thead><tbody>"
-                for ri, row in enumerate(rows):
-                    rc = "even" if ri % 2 == 0 else ""
-                    table_html += f"<tr class='{rc}'>"
-                    for cell in row:
-                        table_html += f"<td>{cell}</td>"
-                    table_html += "</tr>"
-                table_html += "</tbody></table>"
+        if tbl and isinstance(tbl, dict) and tbl.get("headers") and tbl.get("rows"):
+            table_html = "<table class='htbl'><thead><tr>" + "".join(f"<th>{h}</th>" for h in tbl["headers"]) + "</tr></thead><tbody>"
+            for ri, row in enumerate(tbl["rows"]):
+                table_html += f"<tr class='{'even' if ri % 2 == 0 else ''}'>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>"
+            table_html += "</tbody></table>"
 
-        bullets_html = ""
-        if bullets:
-            bullets_html = (
-                "<ul class='hbul'>"
-                + "".join(f"<li>{b}</li>" for b in bullets)
-                + "</ul>"
-            )
-
-        questions_html = ""
-        if questions:
-            questions_html = (
-                "<ol class='hpq'>"
-                + "".join(f"<li>{q}</li>" for q in questions)
-                + "</ol>"
-            )
+        bullets_html = "<ul class='hbul'>" + "".join(f"<li>{b}</li>" for b in bullets) + "</ul>" if bullets else ""
+        questions_html = "<ol class='hpq'>" + "".join(f"<li>{q}</li>" for q in questions) + "</ol>" if questions else ""
 
         sections_html += f"""
         <div class="sbox">
           <div class="shdr" style="background:{hdr_color}">&#9632; {sh}</div>
-          <div class="sbody">
-            {"<p>" + text + "</p>" if text else ""}
-            {table_html}
-            {bullets_html}
-            {questions_html}
-          </div>
+          <div class="sbody">{"<p>" + text + "</p>" if text else ""}{table_html}{bullets_html}{questions_html}</div>
         </div>"""
 
-    footer_html = (
-        '<div class="pg-footer">'
-        'For more videos and free study materials, Join our app: '
-        '<a href="[https://shorturl.at/rpTqP](https://shorturl.at/rpTqP)">[https://shorturl.at/rpTqP](https://shorturl.at/rpTqP)</a>'
-        '&nbsp;&nbsp;|&nbsp;&nbsp;'
-        'For one-to-one Mentorship: Send <strong>Hi</strong> on WhatsApp '
-        '<strong>9491370061</strong>'
-        '</div>'
-    )
+    footer_html = '<div class="pg-footer">For more videos and free study materials, Join our app: <a href="[https://shorturl.at/rpTqP](https://shorturl.at/rpTqP)">[https://shorturl.at/rpTqP](https://shorturl.at/rpTqP)</a> &nbsp;&nbsp;|&nbsp;&nbsp; For one-to-one Mentorship: Send <strong>Hi</strong> on WhatsApp <strong>9491370061</strong></div>'
 
     return f"""<!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SKY Academy -- {display_heading}</title>
-<style>
-*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SKY Academy -- {display_heading}</title>
+<style>*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
 body{{font-family:'Segoe UI',Arial,sans-serif;background:#d4d8e8;padding:20px;color:#111;font-size:13px;line-height:1.65;padding-bottom:60px}}
 .page{{max-width:820px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 6px 32px rgba(0,0,0,.18);margin-bottom:60px}}
 .pbtn-wrap{{text-align:center;padding:14px 20px 6px;background:#f8f9ff}}
@@ -1416,47 +1489,29 @@ body{{font-family:'Segoe UI',Arial,sans-serif;background:#d4d8e8;padding:20px;co
   .pg-footer{{position:fixed;bottom:0;left:0;right:0;font-size:9px;padding:6px 16px}}
   .sbox{{break-inside:avoid}}
   @page{{margin:1.2cm 1.5cm 2.2cm 1.5cm}}
-}}
-</style>
-</head>
+}}</style></head>
 <body>
 <div class="page">
-  <div class="pbtn-wrap">
-    <button class="pbtn" onclick="window.print()">Print / Save as PDF</button>
-    <p class="phint">Chrome or Edge -- Ctrl+P -- Save as PDF</p>
-  </div>
+  <div class="pbtn-wrap"><button class="pbtn" onclick="window.print()">Print / Save as PDF</button><p class="phint">Chrome or Edge -- Ctrl+P -- Save as PDF</p></div>
   <div class="hdr">
     <div class="logo"><span class="ls">S</span><span class="lk">K</span><span class="ly">Y</span></div>
     <div class="acad">Academy</div>
     <div class="htitle">{display_heading}</div>
     <div class="hsubtitle">Classroom Notes &nbsp;·&nbsp; Competitive Exam Preparation</div>
   </div>
-  {vid_html}
-  {importance_html}
-  {facts_html}
-  {sections_html}
+  {vid_html}{importance_html}{facts_html}{sections_html}
 </div>
 {footer_html}
-</body>
-</html>"""
+</body></html>"""
 
-
-# ============================================================
-# RENDER HANDOUT DOCX
-# ============================================================
-def render_handout_docx(heading: str, youtube_link: str,
-                        content_data: dict, topic: str):
+def render_handout_docx(heading: str, youtube_link: str, content_data: dict, topic: str):
     try:
         from docx import Document
         from docx.shared import Pt
         from docx.enum.text import WD_ALIGN_PARAGRAPH
-
         doc = Document()
-
-        t = doc.add_heading(heading.strip() if heading.strip() else
-                            content_data.get("topic_title", topic), 0)
+        t = doc.add_heading(heading.strip() if heading.strip() else content_data.get("topic_title", topic), 0)
         t.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
         vl = doc.add_paragraph()
         if youtube_link.strip():
             vl.add_run(f"Video: {youtube_link.strip()}").italic = True
@@ -1464,12 +1519,10 @@ def render_handout_docx(heading: str, youtube_link: str,
             vl.add_run("Watch: [https://www.youtube.com/@Skyacademytelugu](https://www.youtube.com/@Skyacademytelugu)").italic = True
         vl.alignment = WD_ALIGN_PARAGRAPH.CENTER
         doc.add_paragraph()
-
         ei = content_data.get("exam_importance","")
         if ei:
             doc.add_heading("Why it Matters for Exams", 2)
             doc.add_paragraph(ei)
-
         kf_list = content_data.get("key_facts",[])
         if kf_list:
             doc.add_heading("Key Facts", 2)
@@ -1478,38 +1531,26 @@ def render_handout_docx(heading: str, youtube_link: str,
                 r = p.add_run(f"{kf.get('label','')}: ")
                 r.bold = True
                 p.add_run(kf.get("value",""))
-
         for sec in content_data.get("sections",[]):
             doc.add_heading(sec.get("heading",""), 2)
             text = sec.get("text","")
             if text:
                 doc.add_paragraph(text)
             tbl = sec.get("table",None)
-            if tbl and isinstance(tbl, dict):
-                headers = tbl.get("headers",[])
-                rows    = tbl.get("rows",[])
-                if headers and rows:
-                    table = doc.add_table(rows=1+len(rows), cols=len(headers))
-                    table.style = "Table Grid"
-                    hcells = table.rows[0].cells
-                    for ci, h in enumerate(headers):
-                        hcells[ci].text = h
-                    for ri, row in enumerate(rows):
-                        rcells = table.rows[ri+1].cells
-                        for ci, cell in enumerate(row):
-                            rcells[ci].text = str(cell)
-            for b in sec.get("bullets",[]):
-                doc.add_paragraph(b, style="List Bullet")
-            for q in sec.get("questions",[]):
-                doc.add_paragraph(q, style="List Number")
-
+            if tbl and isinstance(tbl, dict) and tbl.get("headers") and tbl.get("rows"):
+                table = doc.add_table(rows=1+len(tbl["rows"]), cols=len(tbl["headers"]))
+                table.style = "Table Grid"
+                for ci, h in enumerate(tbl["headers"]): table.rows[0].cells[ci].text = h
+                for ri, row in enumerate(tbl["rows"]):
+                    for ci, cell in enumerate(row): table.rows[ri+1].cells[ci].text = str(cell)
+            for b in sec.get("bullets",[]): doc.add_paragraph(b, style="List Bullet")
+            for q in sec.get("questions",[]): doc.add_paragraph(q, style="List Number")
         doc.add_paragraph()
         fp = doc.add_paragraph(
             "For more videos and free study materials, Join our app: [https://shorturl.at/rpTqP](https://shorturl.at/rpTqP)\n"
             "For one-to-one Mentorship: Send Hi on WhatsApp 9491370061"
         )
         fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
         buf = io.BytesIO()
         doc.save(buf)
         buf.seek(0)
@@ -1517,492 +1558,14 @@ def render_handout_docx(heading: str, youtube_link: str,
     except Exception:
         return None
 
-
-# ============================================================
-# FILE TEXT EXTRACTION
-# ============================================================
-def extract_pdf_text(file_bytes: bytes):
-    try:
-        import pypdf
-        reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-        pages  = [p.extract_text() for p in reader.pages if p.extract_text()]
-        if pages:
-            return "\n".join(pages).strip(), f"pypdf · {len(reader.pages)} pages"
-    except Exception:
-        pass
-    try:
-        import PyPDF2
-        reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
-        pages  = [p.extract_text() for p in reader.pages if p.extract_text()]
-        if pages:
-            return "\n".join(pages).strip(), f"PyPDF2 · {len(reader.pages)} pages"
-    except Exception:
-        pass
-    try:
-        import pdfplumber
-        pages = []
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            for pg in pdf.pages:
-                t = pg.extract_text()
-                if t:
-                    pages.append(t)
-        if pages:
-            return "\n".join(pages).strip(), f"pdfplumber · {len(pages)} pages"
-    except Exception:
-        pass
-    return None, "No PDF library. Run: pip install pypdf"
-
-
-def extract_docx_text(file_bytes: bytes):
-    try:
-        from docx import Document
-        doc   = Document(io.BytesIO(file_bytes))
-        parts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-        for tbl in doc.tables:
-            for row in tbl.rows:
-                for cell in row.cells:
-                    if cell.text.strip():
-                        parts.append(cell.text.strip())
-        text = "\n".join(parts)
-        if text.strip():
-            return text.strip(), f"python-docx · {len(doc.paragraphs)} paragraphs"
-        return None, "DOCX file appears empty or image-only"
-    except ImportError:
-        return None, "python-docx not installed. Run: pip install python-docx"
-    except Exception as exc:
-        return None, f"DOCX error: {exc}"
-
-
-def extract_any_file(file_bytes: bytes, filename: str):
-    ext = filename.rsplit(".",1)[-1].lower() if "." in filename else ""
-    if ext == "txt":
-        for enc in ("utf-8","utf-16","latin-1"):
-            try:
-                text = file_bytes.decode(enc)
-                if text.strip():
-                    return text.strip(), f"TXT · {len(text.split())} words"
-            except Exception:
-                pass
-        return None, "Could not decode TXT file"
-    elif ext == "docx":
-        return extract_docx_text(file_bytes)
-    elif ext == "pdf":
-        return extract_pdf_text(file_bytes)
-    return None, f"Unsupported file type: .{ext}"
-
-
-# ============================================================
-# AI CALL FUNCTIONS
-# ============================================================
-
-def call_poe(api_key, model, system, user, progress_cb=None):
-    import openai
-    # Poe uses the OpenAI-compatible SDK
-    client = openai.OpenAI(api_key=api_key, base_url=POE_BASE_URL, timeout=300.0)
-    full = ""
-    for chunk in client.chat.completions.create(
-        model=model, max_tokens=16000, stream=True,
-        messages=[{"role":"system","content":system},{"role":"user","content":user}],
-    ):
-        delta = chunk.choices[0].delta.content or ""
-        full += delta
-        if progress_cb and delta:
-            progress_cb(len(full), full)
-    return full
-
-def call_claude_pagegrid(api_key, model, system, user, progress_cb=None):
-    import anthropic
-    if not api_key.startswith("sk-pgrid-"):
-        raise ValueError("PageGrid key must start with 'sk-pgrid-'.")
-    client = anthropic.Anthropic(api_key=api_key, base_url=PAGEGRID_BASE_URL, timeout=300.0)
-    full = ""
-    with client.messages.stream(
-        model=model, max_tokens=16000, system=system,
-        messages=[{"role":"user","content":user}],
-    ) as stream:
-        for chunk in stream.text_stream:
-            full += chunk
-            if progress_cb:
-                progress_cb(len(full), full)
-    return full
-
-
-def call_openai(api_key, model, system, user, progress_cb=None):
-    import openai
-    client       = openai.OpenAI(api_key=api_key, timeout=300.0)
-    is_reasoning = model.startswith("o1") or model.startswith("o3")
-    if is_reasoning:
-        resp = client.chat.completions.create(
-            model=model, max_completion_tokens=16000,
-            messages=[{"role":"user","content":f"{system}\n\n---\n\n{user}"}],
-        )
-        raw = resp.choices[0].message.content
-        if progress_cb:
-            progress_cb(len(raw), raw)
-        return raw
-    else:
-        full = ""
-        for chunk in client.chat.completions.create(
-            model=model, max_tokens=16000, stream=True,
-            messages=[{"role":"system","content":system},{"role":"user","content":user}],
-        ):
-            delta = chunk.choices[0].delta.content or ""
-            full += delta
-            if progress_cb and delta:
-                progress_cb(len(full), full)
-        return full
-
-
-def call_gemini(api_key, model, system, user, progress_cb=None):
-    import google.generativeai as genai
-    genai.configure(api_key=api_key)
-    m    = genai.GenerativeModel(model_name=model, system_instruction=system)
-    full = ""
-    for chunk in m.generate_content(user, stream=True):
-        t = getattr(chunk, "text", "") or ""
-        full += t
-        if progress_cb and t:
-            progress_cb(len(full), full)
-    return full
-
-
-def run_generation(api_key, provider, model, system_p, user_p,
-                   status_ph, stream_ph=None):
-    def _cb(n, text):
-        status_ph.markdown(
-            f'<div class="stream-progress">'
-            f'<b>Generating...</b> &nbsp; {n:,} chars &nbsp;·&nbsp; '
-            f'~{n // 5:,} words est. &nbsp;·&nbsp; keep tab open'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        if stream_ph is not None:
-            display = text[-2800:] if len(text) > 2800 else text
-            stream_ph.text_area(
-                label="stream_live",
-                value=display,
-                height=270,
-                disabled=True,
-                label_visibility="collapsed",
-            )
-
-    if "Poe.com" in provider:
-        return call_poe(api_key, model, system_p, user_p, _cb)
-    elif "PageGrid" in provider:
-        return call_claude_pagegrid(api_key, model, system_p, user_p, _cb)
-    elif "OpenAI" in provider:
-        return call_openai(api_key, model, system_p, user_p, _cb)
-    else:
-        return call_gemini(api_key, model, system_p, user_p, _cb)
-
-# ============================================================
-# THUMBNAIL GENERATION (GPT-IMAGE-1)
-# SKY ACADEMY STYLE
-# ============================================================
-
-import re
-import json
-import base64
-import openai
-
-
-# ============================================================
-# THUMBNAIL PROMPT BUILDER
-# ============================================================
-
-def build_thumbnail_prompt(
-    line1: str,
-    line2: str,
-    line3: str,
-    line4: str,
-    topic: str = "",
-    variation: int = 0
-) -> str:
-
-    variation_text = ""
-
-    if variation > 0:
-        variation_text = f"""
-Use a fresh creative variation #{variation}.
-Change layout slightly while maintaining SKY Academy style.
-"""
-
-    prompt = f"""
-Create a professional Indian educational YouTube thumbnail
-in SKY Academy Telugu coaching style.
-
-{variation_text}
-
-TEXT CONTENT:
-
-Top title bar:
-{line1}
-
-Main biggest headline:
-{line2}
-
-Supporting Telugu line:
-{line3}
-
-Bottom CTA strip:
-{line4}
-
-STYLE:
-- Professional Photoshop-style thumbnail
-- Indian competitive exam coaching design
-- High CTR
-- Mobile readable
-- Strong bold typography
-- Large readable text
-- Clean composition
-- Dark blue cinematic background
-- Yellow + Red + White + Green color palette
-- Subtle glow only behind main text
-- Premium coaching institute look
-- Modern YouTube thumbnail style
-- Balanced spacing
-- Minimal clutter
-- Strong text hierarchy
-
-BACKGROUND:
-Use subtle topic-related visuals automatically.
-
-Examples:
-- SSC / Banking / Railway → books, target, study desk, arrows
-- Law → court, constitution, scales
-- Economy → charts, rupee
-- Geography → map, globe
-- History → monuments
-- Science → formulas, circuits
-- Reasoning → number patterns, arrows
-
-IMPORTANT:
-- Create FINAL thumbnail directly
-- NOT infographic
-- NOT poster template
-- NOT instruction sheet
-- NO fake paragraphs
-- NO random small text blocks
-- NO excessive decorative elements
-- NO fantasy art
-- NO AI poster aesthetics
-- Make it look like a real Indian coaching thumbnail
-- Focus on readability and clickability
-"""
-
-    return prompt.strip()
-
-
-# ============================================================
-# MAIN IMAGE GENERATOR
-# ============================================================
-
-def generate_thumbnail_dalle(
-    line1: str,
-    line2: str,
-    line3: str,
-    line4: str,
-    topic: str,
-    api_key: str,
-    variation: int = 0
-) -> bytes:
-
-    client = openai.OpenAI(
-        api_key=api_key,
-        timeout=180.0
-    )
-
-    prompt = build_thumbnail_prompt(
-        line1=line1,
-        line2=line2,
-        line3=line3,
-        line4=line4,
-        topic=topic,
-        variation=variation
-    )
-
-    response = client.images.generate(
-        model="gpt-image-1",
-        prompt=prompt,
-        size="1536x1024"
-    )
-
-    image_base64 = response.data[0].b64_json
-
-    return base64.b64decode(image_base64)
-
-
-# ============================================================
-# JSON SANITIZER
-# ============================================================
-
-def _sanitize_json_str(s: str) -> str:
-
-    s = s.strip()
-
-    # remove trailing commas
-    s = re.sub(r",\s*}", "}", s)
-    s = re.sub(r",\s*]", "]", s)
-
-    # smart quotes normalize
-    s = s.replace("“", '"').replace("”", '"')
-    s = s.replace("‘", "'").replace("’", "'")
-
-    return s
-
-
-# ============================================================
-# SINGLE SEGMENT PARSER
-# ============================================================
-
-def parse_single_segment(raw: str):
-
-    cleaned = raw.strip()
-
-    cleaned = re.sub(
-        r"^```[a-zA-Z]*\s*\n?",
-        "",
-        cleaned
-    )
-
-    cleaned = re.sub(
-        r"\n?```\s*$",
-        "",
-        cleaned
-    ).strip()
-
-    # direct parse attempts
-    for attempt in [cleaned, _sanitize_json_str(cleaned)]:
-
-        try:
-
-            result = json.loads(attempt)
-
-            if isinstance(result, dict):
-                return result
-
-            if isinstance(result, list) and result:
-                return result[0]
-
-        except Exception:
-            pass
-
-    # regex extraction
-    m = re.search(r"\{[\s\S]*\}", cleaned)
-
-    if m:
-
-        for attempt in [
-            m.group(),
-            _sanitize_json_str(m.group())
-        ]:
-
-            try:
-
-                result = json.loads(attempt)
-
-                if isinstance(result, dict):
-                    return result
-
-            except Exception:
-                pass
-
-    return None
-
-
-# ============================================================
-# SEO JSON PARSER
-# ============================================================
-
-def parse_seo_json(raw: str):
-
-    cleaned = raw.strip()
-
-    cleaned = re.sub(
-        r"^```[a-zA-Z]*\s*\n?",
-        "",
-        cleaned
-    )
-
-    cleaned = re.sub(
-        r"\n?```\s*$",
-        "",
-        cleaned
-    ).strip()
-
-    for attempt in [cleaned, _sanitize_json_str(cleaned)]:
-
-        try:
-
-            result = json.loads(attempt)
-
-            if isinstance(result, dict):
-                return result
-
-        except Exception:
-            pass
-
-    m = re.search(r"\{[\s\S]*\}", cleaned)
-
-    if m:
-
-        for attempt in [
-            m.group(),
-            _sanitize_json_str(m.group())
-        ]:
-
-            try:
-                return json.loads(attempt)
-
-            except Exception:
-                pass
-
-    return None
-    
-# ============================================================
-# GOOGLE SHEETS
-# ============================================================
-def push_to_gsheet(chunks, seo_title="", seo_tags=""):
-    try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-        scopes = ["https://www.googleapis.com/auth/spreadsheets",
-                  "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_info(_HARDCODED_CREDS, scopes=scopes)
-        gc    = gspread.authorize(creds)
-        sheet = gc.open_by_key(SHEET_ID)
-        ws    = sheet.get_worksheet(0)
-        ws.batch_clear(["A2:E10000"])
-        rows = [[i+1, c.get("title", f"Segment {i+1}"), c.get("telugu_text","")]
-                for i, c in enumerate(chunks)]
-        ws.update("A2", rows, value_input_option="RAW")
-        seo_msg = ""
-        if seo_title.strip():
-            ws.update("D2", [[seo_title.strip()]], value_input_option="RAW")
-            seo_msg += " · Title --> D2"
-        if seo_tags.strip():
-            ws.update("E2", [[seo_tags.strip()]], value_input_option="RAW")
-            seo_msg += " · Tags --> E2"
-        return True, f"Pushed {len(rows)} segments (A=Seg, B=Title, C=Script{seo_msg}) -- cleared old data."
-    except Exception as exc:
-        return False, f"Sheets error: {exc}"
-
-
 def _handle_api_error(exc, model_choice):
     err = str(exc)
-    if "401" in err or "authentication_error" in err:
-        st.error("**401 -- Invalid API key.**\n\nPlease check your provider's API key.")
-    elif "402" in err or "billing_error" in err or "insufficient_credits" in err:
-        st.error("**402 -- Insufficient balance/credits.**\n\nAdd funds or points to your provider account.")
-    elif "404" in err or "not found or inactive" in err:
-        st.error(f"**404 -- Model `{model_choice}` not found.**")
-    elif "429" in err or "rate_limit" in err:
-        st.error("**429 -- Rate limited.** Wait ~60 sec and retry.")
-    elif "524" in err or "timeout" in err.lower():
-        st.error("**Timeout.** Try a faster model or reduce word count.")
-    else:
-        st.error(f"Generation error: {exc}")
-
+    if "401" in err or "authentication_error" in err: st.error("**401 -- Invalid API key.**\n\nPlease check your provider's API key.")
+    elif "402" in err or "billing_error" in err or "insufficient_credits" in err: st.error("**402 -- Insufficient balance/credits.**\n\nAdd funds or points to your provider account.")
+    elif "404" in err or "not found or inactive" in err: st.error(f"**404 -- Model `{model_choice}` not found.**")
+    elif "429" in err or "rate_limit" in err: st.error("**429 -- Rate limited.** Wait ~60 sec and retry.")
+    elif "524" in err or "timeout" in err.lower(): st.error("**Timeout.** Try a faster model or reduce word count.")
+    else: st.error(f"Generation error: {exc}")
 
 def _show_manual_recovery(display_topic, display_source):
     st.markdown("#### Manual Recovery")
@@ -2066,7 +1629,6 @@ with st.sidebar:
     st.markdown(f"### {_lbl}")
     st.caption(f"Get yours: [{_hlp}](https://{_hlp.split(' -> ')[0]})" if "->" in _hlp else f"Get yours: [{_hlp}](https://{_hlp})")
 
-    # Use hardcoded Claude key as default for PageGrid
     _default_key = HARDCODED_CLAUDE_KEY if "PageGrid" in provider else ""
     _api_input = st.text_input(
         _lbl, type="password", placeholder=_ph,
@@ -2074,7 +1636,6 @@ with st.sidebar:
         label_visibility="collapsed",
         key=f"api_key_input_{provider[:4]}",
     )
-    # Use hardcoded if field is empty or matches hardcoded
     api_key = _api_input.strip() if _api_input.strip() else _default_key
 
     if api_key:
@@ -2096,11 +1657,11 @@ with st.sidebar:
     st.success("Service account loaded\n\n**forscripting@gen-lang-client...**\n\nPush to Sheets always ready.", icon="🔑")
     st.caption(f"[Open Target Sheet](https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit)")
 
-    # ── CHANGE 2: Dynamic API key input for Thumbnails ──
+    # ── THUMBNAIL MODEL DROPDOWN & API KEY INPUT ──
     st.divider()
     st.markdown("### Thumbnail Settings")
     
-    thumb_model = st.selectbox(
+    thumb_model_selected = st.selectbox(
         "Image Model",
         [
             "🌌 Nano Banana Pro (Gemini 3 Pro)",
@@ -2110,7 +1671,7 @@ with st.sidebar:
         key="thumb_model_sidebar"
     )
 
-    if "DALL-E" in thumb_model:
+    if "DALL-E" in thumb_model_selected:
         thumb_key_input = st.text_input(
             "OpenAI API Key (DALL-E 3)",
             type="password",
@@ -2136,113 +1697,8 @@ with st.sidebar:
     st.divider()
     st.caption("SCRIPT ENGINE v4.0 · SKY Academy Internal Tool")
     st.caption(f"Each segment strictly 150-180 words")
-) -> str:
-
-    variation_text = ""
-    if variation > 0:
-        variation_text = f"Apply a fresh creative layout variation #{variation}, but keep the core style."
-
-    prompt = f"""
-Create a highly professional, high-CTR educational YouTube thumbnail for an Indian competitive exam channel called "SKY Academy".
-We need the best possible thumbnail capturing an intense, authoritative, and cinematic coaching style. 
-
-{variation_text}
-
-TEXT ELEMENTS TO INCLUDE EXACTLY:
-1. Top Ribbon/Badge: "{line1}"
-2. Main Massive Headline: "{line2}"
-3. Sub-Headline/Context: "{line3}"
-4. Bottom Hook/Banner: "{line4}"
-
-VISUAL STYLE & AESTHETIC:
-- Inspiration: Indian UPSC/High Court/SSC coaching videos.
-- Background: A cinematic, dark and moody background (e.g., dark blue, crimson red, or charcoal). Subtly blend thematic elements into the background (like the High Court building, scales of justice, law books, a target board, or a study desk) based on the topic: {topic}.
-- Typography: Bold, massive, thick sans-serif fonts. Make the main headline pop with bright yellow or white text. Use 3D bevels, drop shadows, and glowing effects so the text is the absolute focal point.
-- Colors: High contrast. Use vibrant yellow, bright red, clean white, and neon green accents against the dark background.
-- Layout: Clean and uncluttered. Put the top ribbon at the top, the main headline in the center, and the hook at the bottom. 
-- Please make it look as close to a real Photoshop-designed coaching thumbnail as possible. Be creative to suit our needs!
-"""
-    return prompt.strip()
 
 
-# ============================================================
-# MAIN IMAGE GENERATOR
-# ============================================================
-
-def generate_thumbnail_dalle(
-    line1: str,
-    line2: str,
-    line3: str,
-    line4: str,
-    topic: str,
-    api_key: str,
-    variation: int = 0
-) -> bytes:
-    client = openai.OpenAI(api_key=api_key, timeout=180.0)
-    prompt = build_thumbnail_prompt(line1, line2, line3, line4, topic, variation)
-    response = client.images.generate(
-        model="dall-e-3",
-        prompt=prompt,
-        size="1792x1024",
-        quality="hd",
-        response_format="b64_json"
-    )
-    return base64.b64decode(response.data[0].b64_json)
-
-def generate_thumbnail_gemini(
-    line1: str,
-    line2: str,
-    line3: str,
-    line4: str,
-    topic: str,
-    api_key: str,
-    model_endpoint: str,
-    variation: int = 0
-) -> bytes:
-
-    prompt = build_thumbnail_prompt(
-        line1=line1,
-        line2=line2,
-        line3=line3,
-        line4=line4,
-        topic=topic,
-        variation=variation
-    )
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_endpoint}:generateContent?key={api_key}"
-    
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "responseModalities": ["IMAGE"]
-        }
-    }
-    
-    headers = {'Content-Type': 'application/json'}
-    resp = requests.post(url, headers=headers, json=payload)
-    
-    if resp.status_code != 200:
-        raise Exception(f"API Error {resp.status_code}: {resp.text}")
-        
-    data = resp.json()
-    try:
-        parts = data['candidates'][0]['content']['parts']
-        for part in parts:
-            if 'inlineData' in part:
-                img_data = part['inlineData']['data']
-                return base64.b64decode(img_data)
-        raise ValueError("No inlineData found in the response parts.")
-    except Exception as e:
-        raise Exception(f"Failed to parse image from response: {str(e)}")
-
-# ============================================================
-# JSON SANITIZER
 # ============================================================
 # LIVE STREAM MASTER PLACEHOLDER
 # ============================================================
@@ -2741,14 +2197,13 @@ st.markdown("""
 with st.container():
     st.markdown("""
     <div class="thumb-hint">
-    Create high-CTR SKY Academy style thumbnails with DALL-E 3.
+    Create high-CTR SKY Academy style thumbnails.
     Fill the 4 lines manually, or click <b>AI Suggest Lines</b> to auto-fill based on your script.
     Then click <b>Generate Thumbnail</b> to create a professional Photoshop-style thumbnail.
-    <br><b>Note:</b> Paste your OpenAI API key in the sidebar (Thumbnail section) before generating.
+    <br><b>Note:</b> Paste your required API key in the sidebar (Thumbnail Settings) before generating.
     </div>
     """, unsafe_allow_html=True)
 
-    # Show current AI suggestions if available
     if st.session_state.thumb_suggestions:
         sugg = st.session_state.thumb_suggestions
         st.markdown(
@@ -2762,7 +2217,6 @@ with st.container():
             unsafe_allow_html=True,
         )
 
-    # 4 text inputs in 2 columns
     tl_col1, tl_col2 = st.columns(2)
     with tl_col1:
         thumb_l1 = st.text_input(
@@ -2816,7 +2270,6 @@ with st.container():
             help="Generate a different design variation",
         )
 
-    # Handle Suggest Lines
     if thumb_suggest_btn:
         if not api_key.strip():
             st.error("Enter API key in sidebar first!")
@@ -2846,11 +2299,10 @@ with st.container():
                     _ts.empty()
                     st.error(f"Suggestion error: {_exc}")
 
-    # ── CHANGE 3: Handle Generate/Regenerate with Dynamic Model Selection ──
     if thumb_gen_btn or thumb_regen_btn:
         is_regen = thumb_regen_btn
         if is_regen and st.session_state.thumb_img_bytes is None:
-            pass # Button is disabled, ignore
+            pass
         else:
             l1 = st.session_state.get("thumb_l1", "").strip()
             l2 = st.session_state.get("thumb_l2", "").strip()
@@ -2860,7 +2312,6 @@ with st.container():
             thumb_model_selected = st.session_state.get("thumb_model_sidebar", "🌌 Nano Banana Pro (Gemini 3 Pro)")
             is_dalle = "DALL-E" in thumb_model_selected
             
-            # Fetch the correct API key
             api_key_thumb = st.session_state.get("dalle_key_sidebar", "").strip() if is_dalle else st.session_state.get("gemini_key_sidebar", "").strip()
             
             if not api_key_thumb:
@@ -2885,7 +2336,6 @@ with st.container():
                                 st.session_state.last_topic or "competitive exam", api_key=api_key_thumb, model_endpoint="gemini-2.5-flash-image-preview", variation=new_variation
                             )
                         else:
-                            # Default to Nano Banana Pro
                             img_bytes = generate_thumbnail_gemini(
                                 l1 or "SKY ACADEMY", l2 or "COMPETITIVE EXAM PREPARATION", l3 or "STRATEGY + PDF FREE", l4 or "ఇప్పుడే చూడండి!",
                                 st.session_state.last_topic or "competitive exam", api_key=api_key_thumb, model_endpoint="gemini-3-pro-image-preview-11-2025", variation=new_variation
@@ -2899,7 +2349,6 @@ with st.container():
                         st.error(f"Thumbnail generation error: {_exc}")
                         st.caption("Check that your API key is valid and has access to the requested model.")
 
-    # Display generated thumbnail
     if st.session_state.thumb_img_bytes:
         st.markdown("##### Generated Thumbnail Preview")
         st.image(st.session_state.thumb_img_bytes, use_container_width=True)
@@ -2941,7 +2390,6 @@ with st.container():
     </div>
     """, unsafe_allow_html=True)
 
-    # Source selector
     handout_source_radio = st.radio(
         "Handout Content Source:",
         options=[
@@ -3052,7 +2500,6 @@ with st.container():
         else:
             st.button("📄 Download DOCX", disabled=True, use_container_width=True, key="dl_handout_docx_dis2")
 
-    # GENERATE HANDOUT
     if gen_handout_btn:
         if not api_key.strip():
             st.error("Enter your API key in the sidebar first!")
@@ -3074,13 +2521,11 @@ with st.container():
                             handout_pages,
                         )
                     else:
-                        # Standalone mode -- use topic overview
                         _htopic = st.session_state.get("standalone_handout_topic","").strip()[:60] or "Study Topic"
                         sys_h, usr_h = build_standalone_handout_prompt(
                             standalone_topic_val,
                             handout_pages,
                         )
-                        # Update last_topic for download filename
                         if not st.session_state.last_topic:
                             st.session_state.last_topic = _htopic
 
@@ -3140,8 +2585,8 @@ st.markdown(
     "<span style='color:#FFE66D;font-weight:800;'>K</span>"
     "<span style='color:#4ECDC4;font-weight:800;'>Y</span>"
     " <b>ACADEMY</b> &nbsp;|&nbsp; SCRIPT ENGINE v4.0 &nbsp;|&nbsp; "
-    "Telugu Lipi · 150-180w Chunks · DALL-E 3 Thumbnails · Standalone Handout &nbsp;|&nbsp; "
-    "Powered by Poe + PageGrid + OpenAI SDK"
+    "Telugu Lipi · 150-180w Chunks · AI Thumbnails · Standalone Handout &nbsp;|&nbsp; "
+    "Powered by Poe + PageGrid + Google AI"
     "</div>",
     unsafe_allow_html=True,
 )
